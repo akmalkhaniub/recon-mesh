@@ -1,0 +1,403 @@
+openapi: 3.1.0
+info:
+  title: ReconMesh Financial Reconciliation API
+  version: 1.0.0
+  description: |
+    Automated End-of-Day (EOD) 3-Way Financial Reconciliation and Break Resolution Engine.
+    Matches internal ledger entries against bank statements (CAMT.053 / BAI2 / CSV) and payment gateway settlement feeds.
+servers:
+  - url: http://localhost:8081
+    description: Local ReconMesh Engine
+
+paths:
+  /v1/reconciliation/jobs:
+    post:
+      summary: Trigger an automated reconciliation run
+      operationId: createReconciliationJob
+      tags:
+        - Reconciliation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReconciliationJobRequest'
+      responses:
+        '201':
+          description: Reconciliation run completed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationJob'
+        '400':
+          $ref: '#/components/responses/ProblemDetails'
+        '500':
+          $ref: '#/components/responses/ProblemDetails'
+
+  /v1/reconciliation/jobs/{jobId}:
+    get:
+      summary: Retrieve reconciliation job status and summary
+      operationId: getReconciliationJob
+      tags:
+        - Reconciliation
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Job status and match statistics
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationJob'
+        '404':
+          $ref: '#/components/responses/ProblemDetails'
+
+  /v1/reconciliation/jobs/{jobId}/breaks:
+    get:
+      summary: List categorized reconciliation breaks for a job
+      operationId: listReconciliationBreaks
+      tags:
+        - Breaks
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: type
+          in: query
+          required: false
+          schema:
+            $ref: '#/components/schemas/BreakType'
+      responses:
+        '200':
+          description: List of reconciliation breaks
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BreakList'
+        '404':
+          $ref: '#/components/responses/ProblemDetails'
+
+  /v1/reconciliation/breaks/{breakId}/resolve:
+    post:
+      summary: Resolve a reconciliation break with audit trail
+      operationId: resolveBreak
+      tags:
+        - Breaks
+      parameters:
+        - name: breakId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ResolveBreakRequest'
+      responses:
+        '200':
+          description: Break resolved
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationBreak'
+        '404':
+          $ref: '#/components/responses/ProblemDetails'
+
+  /v1/reconciliation/jobs/{jobId}/report:
+    get:
+      summary: Retrieve EOD audit and compliance report
+      operationId: getReconciliationReport
+      tags:
+        - Reconciliation
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: EOD reconciliation audit report
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReconciliationReport'
+        '404':
+          $ref: '#/components/responses/ProblemDetails'
+
+components:
+  responses:
+    ProblemDetails:
+      description: Standard RFC 7807 Error
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/ProblemDetails'
+
+  schemas:
+    RecordSource:
+      type: string
+      enum:
+        - INTERNAL_LEDGER
+        - BANK_STATEMENT
+        - PROCESSOR_GATEWAY
+
+    TransactionDirection:
+      type: string
+      enum:
+        - DEBIT
+        - CREDIT
+
+    BreakType:
+      type: string
+      enum:
+        - UNMATCHED_INTERNAL
+        - UNMATCHED_EXTERNAL
+        - AMOUNT_MISMATCH
+        - DATE_OUT_OF_BOUNDS
+
+    BreakStatus:
+      type: string
+      enum:
+        - OPEN
+        - RESOLVED
+        - ESCALATED
+
+    ResolutionAction:
+      type: string
+      enum:
+        - MANUAL_MATCH
+        - WRITE_OFF
+        - POST_SUSPENSE_ENTRY
+
+    CanonicalTransaction:
+      type: object
+      required:
+        - id
+        - source
+        - reference
+        - amount
+        - currency
+        - direction
+        - timestamp
+      properties:
+        id:
+          type: string
+          format: uuid
+        source:
+          $ref: '#/components/schemas/RecordSource'
+        reference:
+          type: string
+          example: col_ach_93817
+        amount:
+          type: integer
+          format: int64
+          description: Amount in minor currency units (cents).
+          example: 25000
+        currency:
+          type: string
+          example: USD
+        direction:
+          $ref: '#/components/schemas/TransactionDirection'
+        timestamp:
+          type: string
+          format: date-time
+
+    CreateReconciliationJobRequest:
+      type: object
+      required:
+        - currency
+        - internal_records
+        - external_records
+      properties:
+        currency:
+          type: string
+          example: USD
+        internal_records:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanonicalTransaction'
+        external_records:
+          type: array
+          items:
+            $ref: '#/components/schemas/CanonicalTransaction'
+
+    ReconciliationJob:
+      type: object
+      required:
+        - id
+        - status
+        - currency
+        - total_internal_records
+        - total_external_records
+        - matched_count
+        - unmatched_count
+        - matched_volume
+        - broken_volume
+        - match_rate_percentage
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [COMPLETED, IN_PROGRESS, FAILED]
+        currency:
+          type: string
+        total_internal_records:
+          type: integer
+        total_external_records:
+          type: integer
+        matched_count:
+          type: integer
+        unmatched_count:
+          type: integer
+        matched_volume:
+          type: integer
+          format: int64
+        broken_volume:
+          type: integer
+          format: int64
+        match_rate_percentage:
+          type: number
+          format: float
+          example: 99.4
+        created_at:
+          type: string
+          format: date-time
+
+    ReconciliationBreak:
+      type: object
+      required:
+        - id
+        - job_id
+        - type
+        - status
+        - variance_amount
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+        job_id:
+          type: string
+          format: uuid
+        type:
+          $ref: '#/components/schemas/BreakType'
+        status:
+          $ref: '#/components/schemas/BreakStatus'
+        internal_record:
+          $ref: '#/components/schemas/CanonicalTransaction'
+        external_record:
+          $ref: '#/components/schemas/CanonicalTransaction'
+        variance_amount:
+          type: integer
+          format: int64
+        suspense_entry_id:
+          type: string
+          format: uuid
+        resolution_note:
+          type: string
+        resolved_by:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    BreakList:
+      type: object
+      required:
+        - items
+        - total
+      properties:
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/ReconciliationBreak'
+        total:
+          type: integer
+
+    ResolveBreakRequest:
+      type: object
+      required:
+        - action
+        - resolution_note
+        - resolved_by
+      properties:
+        action:
+          $ref: '#/components/schemas/ResolutionAction'
+        resolution_note:
+          type: string
+          minLength: 5
+        resolved_by:
+          type: string
+          example: ops_agent_04
+
+    ReconciliationReport:
+      type: object
+      required:
+        - job_id
+        - execution_time_ms
+        - currency
+        - match_rate
+        - total_internal_volume
+        - total_external_volume
+        - net_variance
+        - open_breaks_count
+      properties:
+        job_id:
+          type: string
+          format: uuid
+        execution_time_ms:
+          type: integer
+          format: int64
+        currency:
+          type: string
+        match_rate:
+          type: number
+          format: float
+        total_internal_volume:
+          type: integer
+          format: int64
+        total_external_volume:
+          type: integer
+          format: int64
+        net_variance:
+          type: integer
+          format: int64
+        open_breaks_count:
+          type: integer
+
+    ProblemDetails:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - code
+        - detail
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string
